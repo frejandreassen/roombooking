@@ -87,7 +87,7 @@ def restore_db_if_needed():
 
 GCS_BUCKET = "andreassens.appspot.com"
 DB_NAME = "bookings.db"
-DB_BKP_NAME = "bookings_bkp.db"
+DB_BKP_NAME = "bookings_dev.db"
 
 init_db()  # Initialize the database
 restore_db_if_needed()  # Call the function to potentially restore the database
