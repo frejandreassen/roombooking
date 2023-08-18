@@ -2,6 +2,31 @@ import streamlit as st
 import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
+from google.cloud import storage
+from google.oauth2 import service_account
+
+# Helper functions to upload and download from GCS
+def upload_db_to_gcs(credentials, bucket_name, source_file_name, destination_blob_name):
+    """Uploads a file to the bucket."""
+    storage_client = storage.Client(credentials=credentials)
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(source_file_name)
+    print(f"Uploaded {source_file_name} to {destination_blob_name} in {bucket_name}.")
+
+def download_db_from_gcs(credentials, bucket_name, source_blob_name, destination_file_name):
+    """Downloads a blob from the bucket."""
+    storage_client = storage.Client(credentials=credentials)
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(source_blob_name)
+    blob.download_to_filename(destination_file_name)
+    print(f"Downloaded {source_blob_name} from {bucket_name} to {destination_file_name}.")
+
+# Create a credentials object using the service account info from the secrets
+credentials = service_account.Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"],
+    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+)
 
 st.set_page_config(layout="wide")
 
@@ -49,7 +74,24 @@ def get_all_bookings(date):
         bookings = cur.fetchall()
     return bookings
 
+
+# Check if the database was restored today
+def restore_db_if_needed():
+    today = datetime.now().date()
+    last_restored_date = st.session_state.get("last_restored_date", None)
+    
+    if last_restored_date != today:
+        download_db_from_gcs(credentials, GCS_BUCKET, DB_BKP_NAME, DB_NAME)
+        st.session_state.last_restored_date = today  # Update the session state with today's date
+
+
+GCS_BUCKET = "andreassens.appspot.com"
+DB_NAME = "bookings.db"
+DB_BKP_NAME = "bookings_bkp.db"
+
 init_db()  # Initialize the database
+restore_db_if_needed()  # Call the function to potentially restore the database
+
 
 # Sample rooms
 rooms = ['Styrelsen', 'Visionären', 'Innovatören', 'Entreprenören', 'Amatören', 'Coffice']
@@ -57,32 +99,35 @@ rooms = ['Styrelsen', 'Visionären', 'Innovatören', 'Entreprenören', 'Amatöre
 # Generate time slots
 timeslots = [(datetime(2023, 1, 1, 7, 0) + timedelta(minutes=30*i)).strftime('%H:%M') for i in range(25)]
 
-
-if st.text_input('Ange lösenord:', ) == st.secrets["losen"]:
+losen = st.text_input('Ange lösenord:', )
+if losen == st.secrets["losen"]:
 
     # Static Sidebar for Booking Form
     with st.sidebar:
         st.write("Booking Form")
         room_selection = st.selectbox("Select Room", rooms)
         timeslot_selection = st.selectbox("Select Timeslot", timeslots)
-        
-        # Create a dynamic end timeslot selection that starts from the selected timeslot
         end_timeslots = timeslots[timeslots.index(timeslot_selection)+1:]
         end_time_selection = st.selectbox("End Time", end_timeslots)
-        
-        booking_info = st.text_area("Booking Info")
+        booking_info = st.text_area("Your name and Booking Info")
 
         if st.button("Confirm Booking"):
-            if is_room_available(room_selection, str(st.session_state.selected_date), timeslot_selection, end_time_selection):
-                try:
-                    with sqlite3.connect("bookings.db") as conn:
-                        conn.execute("INSERT INTO bookings (room_name, date, start_time, end_time, booking_info) VALUES (?, ?, ?, ?, ?)", 
-                                    (room_selection, str(st.session_state.selected_date), timeslot_selection, end_time_selection, booking_info))
-                    st.sidebar.success("Booking Confirmed!")
-                except Exception as e:
-                    st.sidebar.error(f"Error: {e}")
+            if not booking_info:  # Check if booking info is empty
+                st.sidebar.warning("Booking info is mandatory!")
             else:
-                st.sidebar.warning("Room is already booked for the selected timeslot!")
+                if is_room_available(room_selection, str(st.session_state.selected_date), timeslot_selection, end_time_selection):
+                    try:
+                        with sqlite3.connect("bookings.db") as conn:
+                            conn.execute("INSERT INTO bookings (room_name, date, start_time, end_time, booking_info) VALUES (?, ?, ?, ?, ?)", 
+                                        (room_selection, str(st.session_state.selected_date), timeslot_selection, end_time_selection, booking_info))
+                        st.sidebar.success("Booking Confirmed!")
+                        upload_db_to_gcs(credentials, GCS_BUCKET, DB_NAME, DB_BKP_NAME)
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Error: {e}")
+                else:
+                    st.sidebar.warning("Room is already booked for the selected timeslot!")
+
 
 
     # Main Streamlit UI
@@ -133,6 +178,12 @@ if st.text_input('Ange lösenord:', ) == st.secrets["losen"]:
             if row[5].button('🗑️', key=f"delete_{index}"):
                 delete_booking(booking['Room'], booking['Date'], booking['Start Time'])
                 st.success("Booking Deleted!")
+                upload_db_to_gcs(credentials, GCS_BUCKET, DB_NAME, DB_BKP_NAME)
                 st.experimental_rerun()
     else:
         st.write("No bookings for the selected date.")
+
+    if st.button("Restore Database"):
+        download_db_from_gcs(credentials, GCS_BUCKET, DB_BKP_NAME, DB_NAME)
+        st.success("Database downloaded successfully!")
+        st.experimental_rerun()
