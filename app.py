@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
@@ -57,8 +58,11 @@ def is_room_available(room, date, start_time, end_time):
         cur = conn.cursor()
         cur.execute("""
             SELECT * FROM bookings WHERE room_name=? AND date=? AND 
-            ((start_time BETWEEN ? AND ?) OR (end_time BETWEEN ? AND ?) OR (start_time <= ? AND end_time >= ?))
-        """, (room, date, start_time, end_time, start_time, end_time, start_time, end_time))
+            ((start_time > ? AND start_time < ?) OR 
+             (end_time > ? AND end_time < ?) OR 
+             (start_time <= ? AND end_time > ?) OR
+             (start_time >= ? AND end_time <= ?))
+        """, (room, date, start_time, end_time, start_time, end_time, start_time, start_time, end_time, start_time))
         booking = cur.fetchone()
     return booking is None
 
@@ -110,23 +114,51 @@ if losen == st.secrets["losen"]:
         end_timeslots = timeslots[timeslots.index(timeslot_selection)+1:]
         end_time_selection = st.selectbox("End Time", end_timeslots)
         booking_info = st.text_area("Your name and Booking Info")
+        
+        # Checkbox for recurring booking
+        recurring_booking = st.checkbox("Recurring Booking")
+        
+        # Conditionally display the slider based on the checkbox state
+        recurring_weeks = 1  # Default value
+        if recurring_booking:
+            recurring_weeks = st.slider("Number of Weeks (including this week)", 1, 10)
 
         if st.button("Confirm Booking"):
             if not booking_info:  # Check if booking info is empty
-                st.sidebar.warning("Booking info is mandatory!")
+                st.warning("Booking info is mandatory!")
             else:
-                if is_room_available(room_selection, str(st.session_state.selected_date), timeslot_selection, end_time_selection):
-                    try:
+                # Check availability
+                all_dates_available = True
+                current_date = st.session_state.selected_date
+                for _ in range(recurring_weeks if recurring_booking else 1):
+                    if not is_room_available(room_selection, str(current_date), timeslot_selection, end_time_selection):
+                        all_dates_available = False
+                        break
+                    current_date += timedelta(days=7)  # move to next week only if recurring booking
+
+                # Display warning if not all dates are available
+                if not all_dates_available:
+                    st.sidebar.warning(f"Room is not available for all selected dates. No bookings made!")
+                    time.sleep(2)
+                    st.experimental_rerun()
+
+                # Booking logic
+                try:
+                    current_date = st.session_state.selected_date
+                    for _ in range(recurring_weeks if recurring_booking else 1):
                         with sqlite3.connect("bookings.db") as conn:
-                            conn.execute("INSERT INTO bookings (room_name, date, start_time, end_time, booking_info) VALUES (?, ?, ?, ?, ?)", 
-                                        (room_selection, str(st.session_state.selected_date), timeslot_selection, end_time_selection, booking_info))
+                            conn.execute("INSERT INTO bookings (room_name, date, start_time, end_time, booking_info) VALUES (?, ?, ?, ?, ?)",
+                                        (room_selection, str(current_date), timeslot_selection, end_time_selection, booking_info))
+                        current_date += timedelta(days=7)
+                    
+                    if recurring_booking:
+                        st.sidebar.success(f"Recurring bookings confirmed for the next {recurring_weeks} weeks!")
+                    else:
                         st.sidebar.success("Booking Confirmed!")
-                        upload_db_to_gcs(credentials, GCS_BUCKET, DB_NAME, DB_BKP_NAME)
-                        st.experimental_rerun()
-                    except Exception as e:
-                        st.sidebar.error(f"Error: {e}")
-                else:
-                    st.sidebar.warning("Room is already booked for the selected timeslot!")
+                    upload_db_to_gcs(credentials, GCS_BUCKET, DB_NAME, DB_BKP_NAME)
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.sidebar.error(f"Error: {e}")
 
 
 
