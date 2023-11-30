@@ -165,6 +165,12 @@ if losen == st.secrets["losen"]:
     # Main Streamlit UI
     st.title("Falkenberg Företagscenter Kvarngatan 2 - Room Booking")
 
+    st.info("""
+        Vi har nu ett nytt och förbättrat bokningssystem. Besök länken nedan och skapa ett konto. Om du har bokningar i detta gamla systemet, överför dem så snart som möjligt till det nya systemet.
+
+        Bokningssystemets länk: [https://bookd.xyz](https://bookd.xyz)
+    """)
+
     # Date picker at the top
     if 'selected_date' not in st.session_state:
         st.session_state.selected_date = datetime.now()
